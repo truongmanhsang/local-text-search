@@ -4,7 +4,7 @@ from typing import Any, Sequence
 
 import httpx
 
-from local_text_search.models import SearchHit
+from local_text_search.models import ChatTurn, SearchHit
 from local_text_search.providers.base import BaseProvider, ProviderError
 
 
@@ -48,8 +48,16 @@ class OpenAIProvider(BaseProvider):
             return "".join(part.get("text", "") for part in content if isinstance(part, dict))
         return str(content)
 
-    def generate_answer(self, question: str, context_chunks: Sequence[SearchHit]) -> str:
-        return self._post(self.build_context_prompt(question, context_chunks), max_tokens=700)
+    def generate_answer(
+        self,
+        question: str,
+        context_chunks: Sequence[SearchHit],
+        conversation_history: Sequence[ChatTurn] | None = None,
+    ) -> str:
+        return self._post(
+            self.build_context_prompt(question, context_chunks, conversation_history),
+            max_tokens=700,
+        )
 
     def rerank(self, query: str, candidates: Sequence[SearchHit]) -> list[str]:
         candidate_ids = [candidate.chunk_id for candidate in candidates]

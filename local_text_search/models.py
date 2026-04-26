@@ -108,6 +108,11 @@ class AnswerResult(BaseModel):
     context_chunks: list[str] = Field(default_factory=list)
 
 
+class ChatTurn(BaseModel):
+    role: str
+    content: str
+
+
 class IndexStats(BaseModel):
     scanned_files: int = 0
     indexed_files: int = 0
@@ -115,4 +120,3 @@ class IndexStats(BaseModel):
     skipped_files: int = 0
     deleted_files: int = 0
     chunks_upserted: int = 0
-

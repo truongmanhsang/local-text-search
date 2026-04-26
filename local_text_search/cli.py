@@ -6,6 +6,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
+from rich.prompt import Prompt
 from rich.table import Table
 
 from local_text_search import __version__
@@ -21,6 +22,7 @@ from local_text_search.config import (
     save_config,
 )
 from local_text_search.indexer import IndexProgress, Indexer
+from local_text_search.models import ChatTurn
 from local_text_search.models import SearchMode
 from local_text_search.providers.base import ProviderError, build_provider
 from local_text_search.search import SearchError, SearchService
@@ -60,6 +62,56 @@ def render_search_results(results: list, title: str) -> None:
 def exit_with_error(message: str) -> None:
     console.print(f"[bold red]Error:[/bold red] {message}")
     raise typer.Exit(code=1)
+
+
+def run_interactive_ask(
+    service: SearchService,
+    *,
+    provider: str | None,
+    top_k: int | None,
+    rerank: bool,
+) -> None:
+    history: list[ChatTurn] = []
+    console.print(
+        Panel.fit(
+            "\n".join(
+                [
+                    "[bold green]Interactive retrieval chat[/bold green]",
+                    "Type a question to search your vault and answer with citations.",
+                    "Commands: /help, /clear, /exit",
+                ]
+            )
+        )
+    )
+    while True:
+        try:
+            question = Prompt.ask("[bold cyan]you[/bold cyan]").strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[bold yellow]Chat ended[/bold yellow]")
+            return
+        if not question:
+            continue
+        if question in {"/exit", "/quit"}:
+            console.print("[bold yellow]Chat ended[/bold yellow]")
+            return
+        if question == "/clear":
+            history.clear()
+            console.print("[bold yellow]Conversation history cleared[/bold yellow]")
+            continue
+        if question == "/help":
+            console.print("Commands: /help, /clear, /exit")
+            continue
+        result = service.ask(
+            question,
+            top_k=top_k,
+            provider_name=provider,
+            rerank=rerank,
+            conversation_history=history,
+        )
+        console.print(Panel(result.answer, title=f"Answer via {result.provider}:{result.model}", expand=False))
+        render_search_results(result.sources, title="Sources")
+        history.append(ChatTurn(role="user", content=question))
+        history.append(ChatTurn(role="assistant", content=result.answer))
 
 
 def run_index_with_progress(indexer: Indexer, *, full_rebuild: bool) -> object:
@@ -229,13 +281,14 @@ def search(
 
 @app.command()
 def ask(
-    question: str = typer.Argument(..., help="Question to answer."),
+    question: str | None = typer.Argument(None, help="Question to answer. Omit to start interactive chat."),
     vault: str | None = typer.Option(None, "--vault", help="Vault name."),
     top_k: int | None = typer.Option(None, "--top-k", help="Context chunk count."),
     provider: str | None = typer.Option(None, "--provider", help="Answer provider."),
     rerank: bool | None = typer.Option(None, "--rerank/--no-rerank", help="Enable provider reranking."),
+    interactive: bool = typer.Option(False, "--interactive", "-i", help="Start an interactive chat session."),
 ) -> None:
-    """Answer a question using retrieved vault context."""
+    """Answer a question or start an interactive retrieval chat."""
     config = resolve_config()
     try:
         selected_vault = resolve_vault(config, vault)
@@ -243,11 +296,20 @@ def ask(
         exit_with_error(str(exc))
     service = SearchService(config=config, vault=selected_vault)
     try:
+        resolved_rerank = config.search.rerank_default_ask if rerank is None else rerank
+        if interactive or question is None:
+            run_interactive_ask(
+                service,
+                provider=provider,
+                top_k=top_k,
+                rerank=resolved_rerank,
+            )
+            return
         result = service.ask(
             question,
             top_k=top_k,
             provider_name=provider,
-            rerank=config.search.rerank_default_ask if rerank is None else rerank,
+            rerank=resolved_rerank,
         )
     except (SearchError, ProviderError, Exception) as exc:
         exit_with_error(str(exc))

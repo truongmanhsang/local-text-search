@@ -112,6 +112,18 @@ Ask a question with cited sources:
 local-text-search ask "What did I write about retrieval augmented generation?"
 ```
 
+Start an interactive retrieval chat:
+
+```bash
+local-text-search ask
+```
+
+Or explicitly:
+
+```bash
+local-text-search ask --interactive
+```
+
 Rebuild an index from scratch:
 
 ```bash

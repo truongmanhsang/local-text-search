@@ -4,7 +4,7 @@ from typing import Sequence
 
 import httpx
 
-from local_text_search.models import SearchHit
+from local_text_search.models import ChatTurn, SearchHit
 from local_text_search.providers.base import BaseProvider, ProviderError
 
 
@@ -45,8 +45,16 @@ class AnthropicProvider(BaseProvider):
             raise ProviderError("Anthropic response did not include text content.")
         return "".join(text_parts)
 
-    def generate_answer(self, question: str, context_chunks: Sequence[SearchHit]) -> str:
-        return self._post(self.build_context_prompt(question, context_chunks), max_tokens=700)
+    def generate_answer(
+        self,
+        question: str,
+        context_chunks: Sequence[SearchHit],
+        conversation_history: Sequence[ChatTurn] | None = None,
+    ) -> str:
+        return self._post(
+            self.build_context_prompt(question, context_chunks, conversation_history),
+            max_tokens=700,
+        )
 
     def rerank(self, query: str, candidates: Sequence[SearchHit]) -> list[str]:
         candidate_ids = [candidate.chunk_id for candidate in candidates]

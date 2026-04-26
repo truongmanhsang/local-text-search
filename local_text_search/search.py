@@ -7,7 +7,7 @@ from qdrant_client.http import models as qdrant_models
 
 from local_text_search.config import AppConfig, VaultConfig
 from local_text_search.embeddings import EmbeddingClient, build_embedding_client
-from local_text_search.models import AnswerResult, SearchHit, SearchMode
+from local_text_search.models import AnswerResult, ChatTurn, SearchHit, SearchMode
 from local_text_search.providers.base import BaseProvider, build_provider
 from local_text_search.storage import VaultStorage
 
@@ -149,10 +149,12 @@ class SearchService:
         top_k: int | None = None,
         provider_name: str | None = None,
         rerank: bool = True,
+        conversation_history: Sequence[ChatTurn] | None = None,
     ) -> AnswerResult:
         provider = build_provider(self.config, provider_name=provider_name)
+        retrieval_query = self._build_chat_query(question, conversation_history)
         hits = self.search(
-            question,
+            retrieval_query,
             mode=SearchMode.HYBRID,
             top_k=top_k,
             rerank=rerank,
@@ -160,7 +162,7 @@ class SearchService:
         )
         if not hits:
             raise SearchError("No search hits were found for the question.")
-        answer = provider.generate_answer(question, hits)
+        answer = provider.generate_answer(question, hits, conversation_history)
         return AnswerResult(
             answer=answer,
             provider=provider.provider_name,
@@ -168,3 +170,15 @@ class SearchService:
             sources=hits,
             context_chunks=[hit.chunk_id for hit in hits],
         )
+
+    @staticmethod
+    def _build_chat_query(
+        question: str,
+        conversation_history: Sequence[ChatTurn] | None = None,
+    ) -> str:
+        if not conversation_history:
+            return question
+        recent_user_turns = [turn.content for turn in conversation_history if turn.role == "user"][-3:]
+        if not recent_user_turns:
+            return question
+        return "\n".join([*recent_user_turns, question])

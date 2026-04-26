@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from local_text_search.config import AppConfig, VaultConfig
-from local_text_search.models import SearchHit, SearchMode
+from local_text_search.models import ChatTurn, SearchHit, SearchMode
 from local_text_search.search import SearchService
 
 
@@ -81,11 +81,13 @@ class StubStorage:
 class StubProvider:
     provider_name = "stub"
     model_name = "stub-model"
+    last_history = None
 
     def rerank(self, query: str, candidates):
         return ["b", "a"]
 
-    def generate_answer(self, question: str, context_chunks):
+    def generate_answer(self, question: str, context_chunks, conversation_history=None):
+        self.last_history = conversation_history
         return "Answer with [1]"
 
 
@@ -116,3 +118,26 @@ def test_ask_returns_sources_and_provider_metadata(fake_embeddings) -> None:
     assert result.provider == "stub"
     assert result.model == "stub-model"
     assert len(result.sources) == 2
+
+
+def test_ask_uses_history_for_prompt_and_query(fake_embeddings) -> None:
+    config = AppConfig()
+    vault = VaultConfig(name="notes", path=Path("/tmp/notes"))
+    service = SearchService(config=config, vault=vault, storage=StubStorage(), embedding_client=fake_embeddings)
+    stub_provider = StubProvider()
+    original = __import__("local_text_search.search", fromlist=["build_provider"])
+    previous = original.build_provider
+    original.build_provider = lambda config, provider_name=None: stub_provider
+    try:
+        result = service.ask(
+            "What about follow ups?",
+            top_k=2,
+            rerank=False,
+            conversation_history=[ChatTurn(role="user", content="Tell me about alpha")],
+        )
+    finally:
+        original.build_provider = previous
+        service.close()
+    assert result.answer == "Answer with [1]"
+    assert stub_provider.last_history is not None
+    assert stub_provider.last_history[0].content == "Tell me about alpha"
