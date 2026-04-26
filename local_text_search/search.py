@@ -91,6 +91,7 @@ class SearchService:
             semantic_hits = self._semantic_hits(query, limit * 2)
             bm25_hits = self._bm25_hits(query, limit * 2)
             hits = self.merge_hits(semantic_hits=semantic_hits, bm25_hits=bm25_hits, top_k=limit)
+        hits = self.apply_wikilink_expansion(hits, top_k=limit)
         if rerank and hits:
             provider = provider or build_provider(self.config)
             rerank_candidates = hits[: self.config.search.rerank_top_n]
@@ -103,6 +104,72 @@ class SearchService:
             remainder = [hit for hit in hits if hit.chunk_id not in {item.chunk_id for item in ranked}]
             hits = ranked + remainder
         return hits[:limit]
+
+    def apply_wikilink_expansion(self, hits: Sequence[SearchHit], *, top_k: int) -> list[SearchHit]:
+        if not hits:
+            return []
+        alias_index = self.storage.load_note_alias_index()
+        if not alias_index:
+            return list(hits[:top_k])
+        anchor_count = max(0, self.config.search.wikilink_anchor_count)
+        if anchor_count == 0:
+            return list(hits[:top_k])
+        candidate_scores: dict[str, float] = {hit.chunk_id: hit.score for hit in hits}
+        candidate_hits: dict[str, SearchHit] = {hit.chunk_id: hit.model_copy() for hit in hits}
+        target_path_scores: dict[str, float] = {}
+        for anchor in hits[:anchor_count]:
+            for backlink in anchor.backlinks:
+                backlink_key = self.storage.normalize_note_reference(backlink)
+                if not backlink_key:
+                    continue
+                linked_paths = alias_index.get(backlink_key, set())
+                if not linked_paths:
+                    continue
+                for linked_path in linked_paths:
+                    if linked_path == anchor.file_path:
+                        continue
+                    target_path_scores[linked_path] = max(
+                        target_path_scores.get(linked_path, 0.0),
+                        anchor.score * self.config.search.wikilink_weight,
+                    )
+        if not target_path_scores:
+            return list(hits[:top_k])
+        linked_paths = sorted(target_path_scores, key=target_path_scores.get, reverse=True)
+        linked_hits = self.storage.get_search_hits_for_file_paths(
+            linked_paths,
+            per_file_limit=self.config.search.wikilink_chunks_per_target,
+            search_mode=SearchMode.HYBRID,
+        )
+        for linked_hit in linked_hits:
+            path_bonus = target_path_scores.get(linked_hit.file_path, 0.0)
+            chunk_decay = max(0.6, 1.0 - (linked_hit.chunk_index * 0.1))
+            boosted_score = path_bonus * chunk_decay
+            if linked_hit.chunk_id in candidate_hits:
+                candidate_scores[linked_hit.chunk_id] += boosted_score
+                existing = candidate_hits[linked_hit.chunk_id]
+                existing.score = candidate_scores[linked_hit.chunk_id]
+                if existing.semantic_score is None:
+                    existing.semantic_score = None
+                if existing.bm25_score is None:
+                    existing.bm25_score = None
+            else:
+                linked_copy = linked_hit.model_copy()
+                linked_copy.score = boosted_score
+                candidate_hits[linked_copy.chunk_id] = linked_copy
+                candidate_scores[linked_copy.chunk_id] = boosted_score
+        ranked = sorted(
+            candidate_hits.values(),
+            key=lambda hit: (
+                candidate_scores[hit.chunk_id],
+                hit.semantic_score or 0.0,
+                hit.bm25_score or 0.0,
+                -hit.chunk_index,
+            ),
+            reverse=True,
+        )
+        for ranked_hit in ranked:
+            ranked_hit.score = candidate_scores[ranked_hit.chunk_id]
+        return ranked[:top_k]
 
     def merge_hits(
         self,

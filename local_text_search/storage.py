@@ -104,6 +104,34 @@ class VaultStorage:
         if callable(close):
             close()
 
+    @staticmethod
+    def normalize_note_reference(value: str) -> str:
+        normalized = value.strip().replace("\\", "/")
+        if not normalized:
+            return ""
+        if "#" in normalized:
+            normalized = normalized.split("#", 1)[0]
+        normalized = normalized.strip().strip("/")
+        lowered = normalized.lower()
+        for suffix in (".md", ".markdown", ".txt"):
+            if lowered.endswith(suffix):
+                normalized = normalized[: -len(suffix)]
+                lowered = normalized.lower()
+                break
+        return normalized.lower().strip()
+
+    @classmethod
+    def file_path_aliases(cls, file_path: str) -> set[str]:
+        path = Path(file_path)
+        aliases = {
+            cls.normalize_note_reference(path.as_posix()),
+            cls.normalize_note_reference(path.stem),
+        }
+        parent = path.parent.as_posix()
+        if parent and parent != ".":
+            aliases.add(cls.normalize_note_reference(f"{parent}/{path.stem}"))
+        return {alias for alias in aliases if alias}
+
     def _initialize_schema(self) -> None:
         self.connection.executescript(
             """
@@ -190,6 +218,15 @@ class VaultStorage:
     def get_metadata(self, key: str) -> str | None:
         row = self.connection.execute("SELECT value FROM metadata WHERE key = ?", (key,)).fetchone()
         return None if row is None else str(row["value"])
+
+    def load_note_alias_index(self) -> dict[str, set[str]]:
+        rows = self.connection.execute("SELECT path FROM files").fetchall()
+        aliases: dict[str, set[str]] = {}
+        for row in rows:
+            file_path = str(row["path"])
+            for alias in self.file_path_aliases(file_path):
+                aliases.setdefault(alias, set()).add(file_path)
+        return aliases
 
     def load_file_manifest(self) -> dict[str, FileRecord]:
         rows = self.connection.execute(
@@ -390,6 +427,33 @@ class VaultStorage:
             )
             for row in rows
         ]
+
+    def get_search_hits_for_file_paths(
+        self,
+        file_paths: list[str],
+        *,
+        per_file_limit: int = 2,
+        search_mode: SearchMode = SearchMode.HYBRID,
+    ) -> list[SearchHit]:
+        hits: list[SearchHit] = []
+        for file_path in file_paths:
+            for chunk in self.get_chunks_for_file(file_path)[:per_file_limit]:
+                hits.append(
+                    SearchHit(
+                        chunk_id=chunk.chunk_id,
+                        score=0.0,
+                        file_path=chunk.file_path,
+                        vault_name=chunk.vault_name,
+                        heading=chunk.heading,
+                        text=chunk.text,
+                        tags=chunk.tags,
+                        backlinks=chunk.backlinks,
+                        modified_time=chunk.modified_time,
+                        chunk_index=chunk.chunk_index,
+                        search_mode=search_mode,
+                    )
+                )
+        return hits
 
     def remove_file(self, path: str) -> int:
         chunk_ids = [

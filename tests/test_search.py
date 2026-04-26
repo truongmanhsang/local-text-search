@@ -19,6 +19,7 @@ class StubStorage:
             return [1], [1.0]
 
     encoder = Encoder()
+    last_query_texts: list[str] = None
 
     def has_indexed_chunks(self) -> bool:
         return True
@@ -33,6 +34,7 @@ class StubStorage:
                     vault_name=vault_name,
                     heading="Alpha",
                     text="alpha semantic result",
+                    backlinks=["Beta"],
                     modified_time=0.0,
                     chunk_index=0,
                     search_mode=SearchMode.SEMANTIC,
@@ -44,6 +46,7 @@ class StubStorage:
                     vault_name=vault_name,
                     heading="Beta",
                     text="beta semantic result",
+                    backlinks=[],
                     modified_time=0.0,
                     chunk_index=0,
                     search_mode=SearchMode.SEMANTIC,
@@ -57,6 +60,7 @@ class StubStorage:
                 vault_name=vault_name,
                 heading="Beta",
                 text="beta lexical result",
+                backlinks=[],
                 modified_time=0.0,
                 chunk_index=0,
                 search_mode=SearchMode.BM25,
@@ -68,11 +72,37 @@ class StubStorage:
                 vault_name=vault_name,
                 heading="Gamma",
                 text="gamma lexical result",
+                backlinks=[],
                 modified_time=0.0,
                 chunk_index=0,
                 search_mode=SearchMode.BM25,
             ),
         ]
+
+    def load_note_alias_index(self):
+        return {"beta": {"beta.md"}, "a": {"a.md"}, "alpha": {"a.md"}}
+
+    def normalize_note_reference(self, value: str) -> str:
+        return value.lower().strip()
+
+    def get_search_hits_for_file_paths(self, file_paths, *, per_file_limit=2, search_mode=SearchMode.HYBRID):
+        hits = []
+        if "beta.md" in file_paths:
+            hits.append(
+                SearchHit(
+                    chunk_id="b-linked",
+                    score=0.0,
+                    file_path="beta.md",
+                    vault_name="notes",
+                    heading="Beta Linked",
+                    text="beta linked note result",
+                    backlinks=[],
+                    modified_time=0.0,
+                    chunk_index=0,
+                    search_mode=search_mode,
+                )
+            )
+        return hits
 
     def close(self) -> None:
         return None
@@ -99,7 +129,7 @@ def test_hybrid_merge_normalizes_and_reranks(fake_embeddings) -> None:
         hits = service.search("query", mode=SearchMode.HYBRID, top_k=3, rerank=True, provider=StubProvider())
     finally:
         service.close()
-    assert [hit.chunk_id for hit in hits] == ["b", "a", "c"]
+    assert [hit.chunk_id for hit in hits] == ["b", "a", "b-linked"]
     assert hits[0].search_mode == SearchMode.HYBRID
 
 
@@ -141,3 +171,17 @@ def test_ask_uses_history_for_prompt_and_query(fake_embeddings) -> None:
     assert result.answer == "Answer with [1]"
     assert stub_provider.last_history is not None
     assert stub_provider.last_history[0].content == "Tell me about alpha"
+
+
+def test_wikilink_expansion_adds_linked_note_hits(fake_embeddings) -> None:
+    config = AppConfig()
+    config.search.wikilink_weight = 0.2
+    vault = VaultConfig(name="notes", path=Path("/tmp/notes"))
+    service = SearchService(config=config, vault=vault, storage=StubStorage(), embedding_client=fake_embeddings)
+    try:
+        hits = service.search("query", mode=SearchMode.HYBRID, top_k=4, rerank=False)
+    finally:
+        service.close()
+    assert any(hit.chunk_id == "b-linked" for hit in hits)
+    linked_hit = next(hit for hit in hits if hit.chunk_id == "b-linked")
+    assert linked_hit.score > 0.0

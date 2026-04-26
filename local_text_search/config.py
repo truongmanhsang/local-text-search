@@ -167,6 +167,9 @@ class SearchConfig(BaseModel):
     rerank_top_n: int = 6
     rerank_default_search: bool = False
     rerank_default_ask: bool = True
+    wikilink_weight: float = 0.12
+    wikilink_anchor_count: int = 3
+    wikilink_chunks_per_target: int = 2
 
 
 class QdrantConfig(BaseModel):
