@@ -14,6 +14,14 @@ default_top_k = 8
 rerank_top_n = 6
 rerank_default_search = false
 rerank_default_ask = true
+filename_weight = 0.18
+heading_weight = 0.12
+tag_weight = 0.08
+exact_match_weight = 0.1
+path_weight = 0.06
+wikilink_weight = 0.12
+wikilink_anchor_count = 3
+wikilink_chunks_per_target = 2
 
 [qdrant]
 location = "local"

@@ -185,3 +185,102 @@ def test_wikilink_expansion_adds_linked_note_hits(fake_embeddings) -> None:
     assert any(hit.chunk_id == "b-linked" for hit in hits)
     linked_hit = next(hit for hit in hits if hit.chunk_id == "b-linked")
     assert linked_hit.score > 0.0
+
+
+def test_metadata_boosts_improve_heading_and_filename_matches(fake_embeddings) -> None:
+    config = AppConfig()
+    config.search.wikilink_anchor_count = 0
+    vault = VaultConfig(name="notes", path=Path("/tmp/notes"))
+
+    @dataclass
+    class MetadataBoostStorage(StubStorage):
+        def query(self, *, query_vector, using: str, vault_name: str, limit: int):
+            if using == self.dense_vector_name:
+                return [
+                    SearchHit(
+                        chunk_id="low",
+                        score=0.6,
+                        file_path="low.md",
+                        vault_name=vault_name,
+                        heading="Low",
+                        text="low semantic result",
+                        backlinks=[],
+                        modified_time=0.0,
+                        chunk_index=0,
+                        search_mode=SearchMode.SEMANTIC,
+                    ),
+                    SearchHit(
+                        chunk_id="generic",
+                        score=0.9,
+                        file_path="random.md",
+                        vault_name=vault_name,
+                        heading="Misc",
+                        text="generic semantic result",
+                        backlinks=[],
+                        modified_time=0.0,
+                        chunk_index=0,
+                        search_mode=SearchMode.SEMANTIC,
+                    ),
+                    SearchHit(
+                        chunk_id="target",
+                        score=0.84,
+                        file_path="how-to-build-gpt-model.md",
+                        vault_name=vault_name,
+                        heading="How to build GPT model",
+                        text="target semantic result",
+                        backlinks=[],
+                        modified_time=0.0,
+                        chunk_index=0,
+                        search_mode=SearchMode.SEMANTIC,
+                    ),
+                ]
+            return [
+                SearchHit(
+                    chunk_id="low",
+                    score=0.5,
+                    file_path="low.md",
+                    vault_name=vault_name,
+                    heading="Low",
+                    text="low lexical result",
+                    backlinks=[],
+                    modified_time=0.0,
+                    chunk_index=0,
+                    search_mode=SearchMode.BM25,
+                ),
+                SearchHit(
+                    chunk_id="generic",
+                    score=1.0,
+                    file_path="random.md",
+                    vault_name=vault_name,
+                    heading="Misc",
+                    text="generic lexical result",
+                    backlinks=[],
+                    modified_time=0.0,
+                    chunk_index=0,
+                    search_mode=SearchMode.BM25,
+                ),
+                SearchHit(
+                    chunk_id="target",
+                    score=0.94,
+                    file_path="how-to-build-gpt-model.md",
+                    vault_name=vault_name,
+                    heading="How to build GPT model",
+                    text="target lexical result",
+                    backlinks=[],
+                    modified_time=0.0,
+                    chunk_index=0,
+                    search_mode=SearchMode.BM25,
+                ),
+            ]
+
+    service = SearchService(
+        config=config,
+        vault=vault,
+        storage=MetadataBoostStorage(),
+        embedding_client=fake_embeddings,
+    )
+    try:
+        hits = service.search("how to build gpt model", mode=SearchMode.HYBRID, top_k=2, rerank=False)
+    finally:
+        service.close()
+    assert [hit.chunk_id for hit in hits] == ["target", "generic"]

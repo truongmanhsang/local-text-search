@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
+import re
 from typing import Sequence
 
 from qdrant_client.http import models as qdrant_models
@@ -40,6 +42,63 @@ class SearchService:
 
     def close(self) -> None:
         self.storage.close()
+
+    @staticmethod
+    def _normalize_text(value: str | None) -> str:
+        if not value:
+            return ""
+        return re.sub(r"\s+", " ", value.strip().lower())
+
+    @classmethod
+    def _query_terms(cls, query: str) -> list[str]:
+        terms = re.findall(r"[a-z0-9][a-z0-9_\-/.]*", cls._normalize_text(query))
+        return [term for term in terms if len(term) >= 2]
+
+    @classmethod
+    def _field_match_ratio(cls, field_text: str, query_terms: Sequence[str]) -> float:
+        if not field_text or not query_terms:
+            return 0.0
+        normalized = cls._normalize_text(field_text)
+        matched = sum(1 for term in query_terms if term in normalized)
+        return matched / len(query_terms)
+
+    def apply_metadata_boosts(self, hits: Sequence[SearchHit], *, query: str, top_k: int) -> list[SearchHit]:
+        if not hits:
+            return []
+        query_terms = self._query_terms(query)
+        normalized_query = self._normalize_text(query)
+        boosted_hits: list[SearchHit] = []
+        for hit in hits:
+            boosted = hit.model_copy()
+            file_name = Path(hit.file_path).stem
+            parent_path = Path(hit.file_path).parent.as_posix()
+            filename_ratio = self._field_match_ratio(file_name, query_terms)
+            heading_ratio = self._field_match_ratio(hit.heading or "", query_terms)
+            tag_ratio = self._field_match_ratio(" ".join(hit.tags), query_terms)
+            path_ratio = self._field_match_ratio(parent_path if parent_path != "." else "", query_terms)
+            boost = (
+                filename_ratio * self.config.search.filename_weight
+                + heading_ratio * self.config.search.heading_weight
+                + tag_ratio * self.config.search.tag_weight
+                + path_ratio * self.config.search.path_weight
+            )
+            if normalized_query:
+                if normalized_query and normalized_query in self._normalize_text(file_name):
+                    boost += self.config.search.exact_match_weight
+                elif normalized_query in self._normalize_text(hit.heading or ""):
+                    boost += self.config.search.exact_match_weight * 0.8
+            boosted.score += boost
+            boosted_hits.append(boosted)
+        boosted_hits.sort(
+            key=lambda hit: (
+                hit.score,
+                hit.semantic_score or 0.0,
+                hit.bm25_score or 0.0,
+                -hit.chunk_index,
+            ),
+            reverse=True,
+        )
+        return boosted_hits[: max(top_k, len(boosted_hits))]
 
     @staticmethod
     def _normalize_scores(hits: Sequence[SearchHit]) -> dict[str, float]:
@@ -91,6 +150,7 @@ class SearchService:
             semantic_hits = self._semantic_hits(query, limit * 2)
             bm25_hits = self._bm25_hits(query, limit * 2)
             hits = self.merge_hits(semantic_hits=semantic_hits, bm25_hits=bm25_hits, top_k=limit)
+        hits = self.apply_metadata_boosts(hits, query=query, top_k=limit)
         hits = self.apply_wikilink_expansion(hits, top_k=limit)
         if rerank and hits:
             provider = provider or build_provider(self.config)
