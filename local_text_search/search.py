@@ -27,6 +27,55 @@ class MergedHit:
 
 
 class SearchService:
+    FOLLOW_UP_PREFIXES = (
+        "what about",
+        "how about",
+        "what else",
+        "tell me more",
+        "expand on",
+        "compare that",
+        "and ",
+        "also ",
+        "còn",
+        "thế còn",
+        "vậy còn",
+        "nói thêm",
+        "chi tiết hơn",
+        "mở rộng",
+        "so sánh",
+    )
+    REFERENTIAL_TERMS = {
+        "it",
+        "its",
+        "this",
+        "that",
+        "these",
+        "those",
+        "they",
+        "them",
+        "their",
+        "he",
+        "she",
+        "him",
+        "her",
+        "again",
+        "more",
+        "same",
+        "above",
+        "former",
+        "latter",
+        "đó",
+        "nó",
+        "này",
+        "kia",
+        "ấy",
+        "vậy",
+        "thế",
+        "thêm",
+        "nữa",
+        "tiếp",
+    }
+
     def __init__(
         self,
         *,
@@ -279,7 +328,8 @@ class SearchService:
         conversation_history: Sequence[ChatTurn] | None = None,
     ) -> AnswerResult:
         provider = build_provider(self.config, provider_name=provider_name)
-        retrieval_query = self._build_chat_query(question, conversation_history)
+        scoped_history = self._conversation_context(question, conversation_history)
+        retrieval_query = self._build_chat_query(question, scoped_history)
         hits = self.search(
             retrieval_query,
             mode=SearchMode.HYBRID,
@@ -289,7 +339,7 @@ class SearchService:
         )
         if not hits:
             raise SearchError("No search hits were found for the question.")
-        answer = provider.generate_answer(question, hits, conversation_history)
+        answer = provider.generate_answer(question, hits, scoped_history or None)
         return AnswerResult(
             answer=answer,
             provider=provider.provider_name,
@@ -305,7 +355,36 @@ class SearchService:
     ) -> str:
         if not conversation_history:
             return question
-        recent_user_turns = [turn.content for turn in conversation_history if turn.role == "user"][-3:]
+        recent_user_turns = [turn.content for turn in conversation_history if turn.role == "user"][-2:]
         if not recent_user_turns:
             return question
         return "\n".join([*recent_user_turns, question])
+
+    @classmethod
+    def _conversation_context(
+        cls,
+        question: str,
+        conversation_history: Sequence[ChatTurn] | None = None,
+    ) -> list[ChatTurn]:
+        if not conversation_history or not cls._is_context_dependent_question(question):
+            return []
+        recent_user_turns = [
+            ChatTurn(role="user", content=turn.content)
+            for turn in conversation_history
+            if turn.role == "user" and cls._normalize_text(turn.content)
+        ]
+        return recent_user_turns[-2:]
+
+    @classmethod
+    def _is_context_dependent_question(cls, question: str) -> bool:
+        normalized = cls._normalize_text(question)
+        if not normalized:
+            return False
+        if any(normalized.startswith(prefix) for prefix in cls.FOLLOW_UP_PREFIXES):
+            return True
+        tokens = set(re.findall(r"\w+", normalized, flags=re.UNICODE))
+        if len(tokens) <= 12 and tokens.intersection(cls.REFERENTIAL_TERMS):
+            return True
+        if len(normalized.split()) <= 6 and normalized.endswith(("more", "details", "again", "thêm", "nữa", "tiếp")):
+            return True
+        return False

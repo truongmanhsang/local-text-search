@@ -55,13 +55,16 @@ class BaseProvider(ABC):
         context = "\n\n".join(sections)
         history = ""
         if conversation_history:
-            rendered_history = []
-            for turn in conversation_history[-6:]:
-                role = turn.role.capitalize()
-                rendered_history.append(f"{role}: {turn.content}")
-            history = "\n\nConversation history:\n" + "\n".join(rendered_history)
+            rendered_history = [f"User: {turn.content}" for turn in conversation_history[-3:] if turn.role == "user"]
+            if rendered_history:
+                history = (
+                    "\n\nConversation context (use only to resolve references in the current question):\n"
+                    + "\n".join(rendered_history)
+                )
         return (
-            "Answer the question using only the provided context. "
+            "Answer the current question using only the provided context. "
+            "Prioritize the current question over earlier conversation turns. "
+            "Use conversation context only to resolve references like pronouns or phrases such as 'that topic'. "
             "Cite supporting chunks inline using square brackets like [1] or [2]. "
             "If the answer is not in the context, say so.\n\n"
             f"{history}\n\nQuestion:\n{question}\n\nContext:\n{context}"

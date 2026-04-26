@@ -8,6 +8,25 @@ from local_text_search.models import ChatTurn, SearchHit, SearchMode
 from local_text_search.search import SearchService
 
 
+class TrackingEmbeddingClient:
+    def __init__(self, delegate) -> None:
+        self.delegate = delegate
+        self.last_query_text: str | None = None
+
+    @property
+    def fingerprint(self) -> str:
+        return self.delegate.fingerprint
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        if texts:
+            self.last_query_text = texts[0]
+        return self.delegate.embed_texts(texts)
+
+    def embed_query(self, text: str) -> list[float]:
+        self.last_query_text = text
+        return self.delegate.embed_query(text)
+
+
 @dataclass
 class StubStorage:
     dense_vector_name: str = "dense"
@@ -153,7 +172,8 @@ def test_ask_returns_sources_and_provider_metadata(fake_embeddings) -> None:
 def test_ask_uses_history_for_prompt_and_query(fake_embeddings) -> None:
     config = AppConfig()
     vault = VaultConfig(name="notes", path=Path("/tmp/notes"))
-    service = SearchService(config=config, vault=vault, storage=StubStorage(), embedding_client=fake_embeddings)
+    tracking_embeddings = TrackingEmbeddingClient(fake_embeddings)
+    service = SearchService(config=config, vault=vault, storage=StubStorage(), embedding_client=tracking_embeddings)
     stub_provider = StubProvider()
     original = __import__("local_text_search.search", fromlist=["build_provider"])
     previous = original.build_provider
@@ -171,6 +191,34 @@ def test_ask_uses_history_for_prompt_and_query(fake_embeddings) -> None:
     assert result.answer == "Answer with [1]"
     assert stub_provider.last_history is not None
     assert stub_provider.last_history[0].content == "Tell me about alpha"
+    assert tracking_embeddings.last_query_text == "Tell me about alpha\nWhat about follow ups?"
+
+
+def test_ask_does_not_drag_old_history_into_standalone_question(fake_embeddings) -> None:
+    config = AppConfig()
+    vault = VaultConfig(name="notes", path=Path("/tmp/notes"))
+    tracking_embeddings = TrackingEmbeddingClient(fake_embeddings)
+    service = SearchService(config=config, vault=vault, storage=StubStorage(), embedding_client=tracking_embeddings)
+    stub_provider = StubProvider()
+    original = __import__("local_text_search.search", fromlist=["build_provider"])
+    previous = original.build_provider
+    original.build_provider = lambda config, provider_name=None: stub_provider
+    try:
+        result = service.ask(
+            "What notes mention beta?",
+            top_k=2,
+            rerank=False,
+            conversation_history=[
+                ChatTurn(role="user", content="Tell me about alpha"),
+                ChatTurn(role="assistant", content="Alpha answer that should not be reused"),
+            ],
+        )
+    finally:
+        original.build_provider = previous
+        service.close()
+    assert result.answer == "Answer with [1]"
+    assert tracking_embeddings.last_query_text == "What notes mention beta?"
+    assert stub_provider.last_history is None
 
 
 def test_wikilink_expansion_adds_linked_note_hits(fake_embeddings) -> None:
