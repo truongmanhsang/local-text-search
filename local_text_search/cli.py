@@ -4,10 +4,13 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 from rich.prompt import Prompt
+from rich.rule import Rule
 from rich.table import Table
+from rich.text import Text
 
 from local_text_search import __version__
 from local_text_search.config import (
@@ -22,8 +25,7 @@ from local_text_search.config import (
     save_config,
 )
 from local_text_search.indexer import IndexProgress, Indexer
-from local_text_search.models import ChatTurn
-from local_text_search.models import SearchMode
+from local_text_search.models import AnswerResult, ChatTurn, SearchMode
 from local_text_search.providers.base import ProviderError, build_provider
 from local_text_search.search import SearchError, SearchService
 
@@ -59,6 +61,48 @@ def render_search_results(results: list, title: str) -> None:
     console.print(table)
 
 
+def render_source_cards(results: list, *, limit: int = 4) -> None:
+    if not results:
+        return
+    console.print(Rule("Sources", style="magenta"))
+    for index, hit in enumerate(results[:limit], start=1):
+        header = Text()
+        header.append(f"[{index}] ", style="cyan")
+        header.append(hit.source_label, style="bold magenta")
+        header.append(f"  score={hit.score:.3f}", style="green")
+        meta = []
+        if hit.tags:
+            meta.append(f"tags: {', '.join(hit.tags[:4])}")
+        if hit.backlinks:
+            meta.append(f"links: {', '.join(hit.backlinks[:3])}")
+        body_lines = [hit.excerpt(320)]
+        if meta:
+            body_lines.append("")
+            body_lines.extend(meta)
+        console.print(
+            Panel(
+                "\n".join(body_lines),
+                title=header,
+                title_align="left",
+                border_style="bright_black",
+                expand=False,
+            )
+        )
+
+
+def render_answer_result(result: AnswerResult) -> None:
+    title = f"{result.provider}:{result.model}"
+    console.print(Rule(title, style="cyan"))
+    console.print(
+        Panel(
+            Markdown(result.answer),
+            border_style="cyan",
+            expand=False,
+        )
+    )
+    render_source_cards(result.sources)
+
+
 def exit_with_error(message: str) -> None:
     console.print(f"[bold red]Error:[/bold red] {message}")
     raise typer.Exit(code=1)
@@ -72,20 +116,28 @@ def run_interactive_ask(
     rerank: bool,
 ) -> None:
     history: list[ChatTurn] = []
+    provider_name = provider or service.config.providers.default_provider
+    provider_instance = build_provider(service.config, provider_name)
+    resolved_top_k = top_k or service.config.search.default_top_k
     console.print(
-        Panel.fit(
+        Panel(
             "\n".join(
                 [
-                    "[bold green]Interactive retrieval chat[/bold green]",
-                    "Type a question to search your vault and answer with citations.",
+                    f"[bold cyan]local-text-search[/bold cyan]  vault=[white]{service.vault.name}[/white]",
+                    f"provider=[white]{provider_instance.provider_name}:{provider_instance.model_name}[/white]  top_k=[white]{resolved_top_k}[/white]",
+                    "",
+                    "Ask a question about your notes.",
                     "Commands: /help, /clear, /exit",
                 ]
-            )
+            ),
+            border_style="cyan",
+            expand=False,
         )
     )
+    turn_number = 1
     while True:
         try:
-            question = Prompt.ask("[bold cyan]you[/bold cyan]").strip()
+            question = Prompt.ask(f"[bold green][{turn_number}][/bold green] [bold cyan]you[/bold cyan]").strip()
         except (EOFError, KeyboardInterrupt):
             console.print("\n[bold yellow]Chat ended[/bold yellow]")
             return
@@ -96,22 +148,29 @@ def run_interactive_ask(
             return
         if question == "/clear":
             history.clear()
+            turn_number = 1
             console.print("[bold yellow]Conversation history cleared[/bold yellow]")
             continue
         if question == "/help":
-            console.print("Commands: /help, /clear, /exit")
+            help_table = Table(show_header=False, box=None, padding=(0, 1))
+            help_table.add_row("/help", "Show available chat commands")
+            help_table.add_row("/clear", "Clear conversation history")
+            help_table.add_row("/exit", "Exit interactive chat")
+            console.print(help_table)
             continue
-        result = service.ask(
-            question,
-            top_k=top_k,
-            provider_name=provider,
-            rerank=rerank,
-            conversation_history=history,
-        )
-        console.print(Panel(result.answer, title=f"Answer via {result.provider}:{result.model}", expand=False))
-        render_search_results(result.sources, title="Sources")
+        console.print(Rule(f"Turn {turn_number}", style="bright_black"))
+        with console.status("[cyan]Searching notes and generating answer...[/cyan]", spinner="dots"):
+            result = service.ask(
+                question,
+                top_k=top_k,
+                provider_name=provider,
+                rerank=rerank,
+                conversation_history=history,
+            )
+        render_answer_result(result)
         history.append(ChatTurn(role="user", content=question))
         history.append(ChatTurn(role="assistant", content=result.answer))
+        turn_number += 1
 
 
 def run_index_with_progress(indexer: Indexer, *, full_rebuild: bool) -> object:
@@ -315,8 +374,7 @@ def ask(
         exit_with_error(str(exc))
     finally:
         service.close()
-    console.print(Panel(result.answer, title=f"Answer via {result.provider}:{result.model}", expand=False))
-    render_search_results(result.sources, title="Sources")
+    render_answer_result(result)
 
 
 @app.command()
