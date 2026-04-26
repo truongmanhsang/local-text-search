@@ -1,0 +1,59 @@
+active_vault = "notes"
+
+[indexing]
+include_patterns = ["**/*.md", "**/*.markdown", "**/*.txt"]
+exclude_patterns = [".git/**", ".obsidian/**", ".local-text-search/**"]
+chunk_size_words = 220
+chunk_overlap_words = 40
+batch_size = 24
+
+[search]
+semantic_weight = 0.65
+bm25_weight = 0.35
+default_top_k = 8
+rerank_top_n = 6
+rerank_default_search = false
+rerank_default_ask = true
+
+[qdrant]
+location = "local"
+url = "http://192.168.1.8:6333/"
+api_key_env = "QDRANT_API_KEY"
+timeout_seconds = 10
+
+[embeddings]
+default_provider = "ollama"
+
+[embeddings.ollama]
+host = "http://localhost:11434"
+model = "nomic-embed-text"
+timeout_seconds = 60
+
+[embeddings.openai]
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+model = "text-embedding-3-small"
+timeout_seconds = 60
+
+[providers]
+default_provider = "ollama"
+
+[providers.ollama]
+host = "http://localhost:11434"
+model = "llama3.1"
+timeout_seconds = 120
+
+[providers.openai]
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-4o-mini"
+timeout_seconds = 120
+
+[providers.anthropic]
+api_key_env = "ANTHROPIC_API_KEY"
+model = "claude-3-5-haiku-latest"
+timeout_seconds = 120
+
+[[vaults]]
+name = "notes"
+path = "/absolute/path/to/your/vault"
