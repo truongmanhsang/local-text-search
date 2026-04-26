@@ -25,6 +25,7 @@ dev = [
 
 [project.scripts]
 local-text-search = "local_text_search.cli:run"
+lts = "local_text_search.cli:run"
 
 [tool.setuptools.packages.find]
 include = ["local_text_search*"]

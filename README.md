@@ -88,6 +88,12 @@ Initialize a vault:
 local-text-search init ~/Documents/Notes
 ```
 
+Short alias:
+
+```bash
+lts init ~/Documents/Notes
+```
+
 Index the active vault:
 
 ```bash
