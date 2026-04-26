@@ -11,7 +11,16 @@ from local_text_search.providers.base import BaseProvider, ProviderError
 class OpenAIProvider(BaseProvider):
     provider_name = "openai"
 
-    def __init__(self, *, base_url: str, api_key: str, model: str, timeout_seconds: float = 120.0) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout_seconds: float = 120.0,
+        master_prompt: str | None = None,
+    ) -> None:
+        super().__init__(master_prompt=master_prompt)
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model_name = model
@@ -55,7 +64,12 @@ class OpenAIProvider(BaseProvider):
         conversation_history: Sequence[ChatTurn] | None = None,
     ) -> str:
         return self._post(
-            self.build_context_prompt(question, context_chunks, conversation_history),
+            self.build_context_prompt(
+                question,
+                context_chunks,
+                conversation_history,
+                master_prompt=self.master_prompt,
+            ),
             max_tokens=700,
         )
 

@@ -67,3 +67,41 @@ def test_context_prompt_prioritizes_current_question() -> None:
     assert "Prioritize the current question" in prompt
     assert "User: Tell me about alpha" in prompt
     assert "assistant answer should not appear" not in prompt
+
+
+def test_context_prompt_includes_master_prompt() -> None:
+    prompt = BaseProvider.build_context_prompt(
+        "What notes mention beta?",
+        [
+            SearchHit(
+                chunk_id="chunk-1",
+                score=1.0,
+                file_path="beta.md",
+                vault_name="notes",
+                heading="Beta",
+                text="Beta note content",
+                modified_time=0.0,
+                chunk_index=0,
+                search_mode=SearchMode.HYBRID,
+            )
+        ],
+        master_prompt="Answer in JSON only.",
+    )
+    assert "Answer the current question using only the provided context." in prompt
+    assert "Additional answering instructions" in prompt
+    assert "Answer in JSON only." in prompt
+
+
+def test_build_provider_propagates_master_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    config = AppConfig.model_validate(
+        {
+            "providers": {
+                "default_provider": "openai",
+                "master_prompt": "Use terse responses.",
+            }
+        }
+    )
+    provider = build_provider(config)
+    assert isinstance(provider, OpenAIProvider)
+    assert provider.master_prompt == "Use terse responses."

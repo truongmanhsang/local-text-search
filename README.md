@@ -147,6 +147,7 @@ local-text-search config
 - OpenAI-compatible providers use `base_url`, `api_key`, and `model`.
 - Anthropic uses `ANTHROPIC_API_KEY` unless `api_key` is set in config.
 - Ollama uses local HTTP endpoints and works offline once models are available.
+- Set `providers.master_prompt` to add shared answer-style instructions for the active answer provider without changing retrieval or reranking behavior.
 
 ## Example Workflow
 

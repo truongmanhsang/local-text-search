@@ -50,3 +50,8 @@ def test_invalid_provider_value_raises_validation_error() -> None:
 def test_qdrant_remote_url_normalizes_missing_scheme() -> None:
     config = AppConfig.model_validate({"qdrant": {"location": "remote", "url": "192.168.1.8:6333/"}})
     assert config.qdrant.url == "http://192.168.1.8:6333/"
+
+
+def test_provider_master_prompt_is_configurable() -> None:
+    config = AppConfig.model_validate({"providers": {"master_prompt": "Answer in JSON only."}})
+    assert config.providers.master_prompt == "Answer in JSON only."

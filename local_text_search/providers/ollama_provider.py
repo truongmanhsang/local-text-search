@@ -11,7 +11,15 @@ from local_text_search.providers.base import BaseProvider, ProviderError
 class OllamaProvider(BaseProvider):
     provider_name = "ollama"
 
-    def __init__(self, *, host: str, model: str, timeout_seconds: float = 120.0) -> None:
+    def __init__(
+        self,
+        *,
+        host: str,
+        model: str,
+        timeout_seconds: float = 120.0,
+        master_prompt: str | None = None,
+    ) -> None:
+        super().__init__(master_prompt=master_prompt)
         self.host = host.rstrip("/")
         self.model_name = model
         self.timeout_seconds = timeout_seconds
@@ -45,7 +53,14 @@ class OllamaProvider(BaseProvider):
         context_chunks: Sequence[SearchHit],
         conversation_history: Sequence[ChatTurn] | None = None,
     ) -> str:
-        return self._post(self.build_context_prompt(question, context_chunks, conversation_history))
+        return self._post(
+            self.build_context_prompt(
+                question,
+                context_chunks,
+                conversation_history,
+                master_prompt=self.master_prompt,
+            )
+        )
 
     def rerank(self, query: str, candidates: Sequence[SearchHit]) -> list[str]:
         candidate_ids = [candidate.chunk_id for candidate in candidates]

@@ -11,7 +11,15 @@ from local_text_search.providers.base import BaseProvider, ProviderError
 class AnthropicProvider(BaseProvider):
     provider_name = "anthropic"
 
-    def __init__(self, *, api_key: str, model: str, timeout_seconds: float = 120.0) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        timeout_seconds: float = 120.0,
+        master_prompt: str | None = None,
+    ) -> None:
+        super().__init__(master_prompt=master_prompt)
         self.api_key = api_key
         self.model_name = model
         self.timeout_seconds = timeout_seconds
@@ -52,7 +60,12 @@ class AnthropicProvider(BaseProvider):
         conversation_history: Sequence[ChatTurn] | None = None,
     ) -> str:
         return self._post(
-            self.build_context_prompt(question, context_chunks, conversation_history),
+            self.build_context_prompt(
+                question,
+                context_chunks,
+                conversation_history,
+                master_prompt=self.master_prompt,
+            ),
             max_tokens=700,
         )
 

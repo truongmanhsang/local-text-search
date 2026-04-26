@@ -19,6 +19,9 @@ class BaseProvider(ABC):
     provider_name: str
     model_name: str
 
+    def __init__(self, *, master_prompt: str | None = None) -> None:
+        self.master_prompt = (master_prompt or "").strip() or None
+
     @abstractmethod
     def generate_answer(
         self,
@@ -37,6 +40,7 @@ class BaseProvider(ABC):
         question: str,
         context_chunks: Sequence[SearchHit],
         conversation_history: Sequence[ChatTurn] | None = None,
+        master_prompt: str | None = None,
     ) -> str:
         sections = []
         for index, chunk in enumerate(context_chunks, start=1):
@@ -61,13 +65,20 @@ class BaseProvider(ABC):
                     "\n\nConversation context (use only to resolve references in the current question):\n"
                     + "\n".join(rendered_history)
                 )
+        master_prompt_block = ""
+        if master_prompt and master_prompt.strip():
+            master_prompt_block = (
+                "\n\nAdditional answering instructions "
+                "(follow these only when they do not conflict with the context-only requirement above):\n"
+                f"{master_prompt.strip()}"
+            )
         return (
             "Answer the current question using only the provided context. "
             "Prioritize the current question over earlier conversation turns. "
             "Use conversation context only to resolve references like pronouns or phrases such as 'that topic'. "
             "Cite supporting chunks inline using square brackets like [1] or [2]. "
             "If the answer is not in the context, say so.\n\n"
-            f"{history}\n\nQuestion:\n{question}\n\nContext:\n{context}"
+            f"{history}{master_prompt_block}\n\nQuestion:\n{question}\n\nContext:\n{context}"
         )
 
     @staticmethod
@@ -130,6 +141,7 @@ def build_provider(config: AppConfig, provider_name: str | None = None) -> BaseP
             api_key=api_key,
             model=settings.model,
             timeout_seconds=settings.timeout_seconds,
+            master_prompt=config.providers.master_prompt,
         )
     if selected == "anthropic":
         from local_text_search.providers.anthropic_provider import AnthropicProvider
@@ -144,8 +156,14 @@ def build_provider(config: AppConfig, provider_name: str | None = None) -> BaseP
             api_key=api_key,
             model=settings.model,
             timeout_seconds=settings.timeout_seconds,
+            master_prompt=config.providers.master_prompt,
         )
     from local_text_search.providers.ollama_provider import OllamaProvider
 
     settings = config.providers.ollama
-    return OllamaProvider(host=settings.host, model=settings.model, timeout_seconds=settings.timeout_seconds)
+    return OllamaProvider(
+        host=settings.host,
+        model=settings.model,
+        timeout_seconds=settings.timeout_seconds,
+        master_prompt=config.providers.master_prompt,
+    )

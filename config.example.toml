@@ -45,6 +45,7 @@ timeout_seconds = 60
 
 [providers]
 default_provider = "ollama"
+master_prompt = "Answer in concise bullets and end with a short summary."
 
 [providers.ollama]
 host = "http://localhost:11434"

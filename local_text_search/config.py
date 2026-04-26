@@ -61,6 +61,7 @@ timeout_seconds = 60
 
 [providers]
 default_provider = "ollama"
+master_prompt = "Answer in concise bullets and end with a short summary."
 
 [providers.ollama]
 host = "http://localhost:11434"
@@ -151,6 +152,7 @@ class AnthropicProviderConfig(BaseModel):
 
 class ProvidersConfig(BaseModel):
     default_provider: Literal["ollama", "openai", "anthropic"] = "ollama"
+    master_prompt: str | None = None
     openai: OpenAIProviderConfig = Field(default_factory=OpenAIProviderConfig)
     anthropic: AnthropicProviderConfig = Field(default_factory=AnthropicProviderConfig)
     ollama: OllamaProviderConfig = Field(default_factory=OllamaProviderConfig)
