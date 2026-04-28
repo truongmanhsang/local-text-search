@@ -24,12 +24,12 @@ class OllamaProvider(BaseProvider):
         self.model_name = model
         self.timeout_seconds = timeout_seconds
 
-    def _post(self, prompt: str) -> str:
+    def _post(self, prompt: str, *, max_tokens: int = 700) -> str:
         body = {
             "model": self.model_name,
             "stream": False,
             "messages": [{"role": "user", "content": prompt}],
-            "options": {"temperature": 0},
+            "options": {"temperature": 0, "num_predict": max_tokens},
         }
         try:
             response = httpx.post(
@@ -47,22 +47,26 @@ class OllamaProvider(BaseProvider):
             raise ProviderError("Ollama response did not include message content.")
         return content
 
+    def complete(self, prompt: str, *, max_tokens: int = 700) -> str:
+        return self._post(prompt, max_tokens=max_tokens)
+
     def generate_answer(
         self,
         question: str,
         context_chunks: Sequence[SearchHit],
         conversation_history: Sequence[ChatTurn] | None = None,
     ) -> str:
-        return self._post(
+        return self.complete(
             self.build_context_prompt(
                 question,
                 context_chunks,
                 conversation_history,
                 master_prompt=self.master_prompt,
-            )
+            ),
+            max_tokens=700,
         )
 
     def rerank(self, query: str, candidates: Sequence[SearchHit]) -> list[str]:
         candidate_ids = [candidate.chunk_id for candidate in candidates]
-        response = self._post(self.build_rerank_prompt(query, candidates))
+        response = self.complete(self.build_rerank_prompt(query, candidates), max_tokens=300)
         return self.parse_rerank_response(response, candidate_ids)

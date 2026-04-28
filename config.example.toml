@@ -23,6 +23,14 @@ wikilink_weight = 0.12
 wikilink_anchor_count = 3
 wikilink_chunks_per_target = 2
 
+[summarization]
+chunk_group_words = 1400
+partial_summary_words = 160
+file_summary_words = 220
+final_summary_words = 420
+reduce_group_size = 8
+retrieval_top_k = 48
+
 [qdrant]
 location = "local"
 url = "http://192.168.1.8:6333/"

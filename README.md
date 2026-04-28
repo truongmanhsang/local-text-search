@@ -118,6 +118,24 @@ Ask a question with cited sources:
 local-text-search ask "What did I write about retrieval augmented generation?"
 ```
 
+Summarize the whole indexed vault:
+
+```bash
+local-text-search summarize
+```
+
+Summarize with a specific focus:
+
+```bash
+local-text-search summarize "Focus on retrieval and vector databases"
+```
+
+Summarize only chunks relevant to a retrieval query:
+
+```bash
+local-text-search summarize "Focus on interview question" --retrieval-query "interview question"
+```
+
 Start an interactive retrieval chat:
 
 ```bash

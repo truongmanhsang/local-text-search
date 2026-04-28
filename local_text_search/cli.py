@@ -25,7 +25,7 @@ from local_text_search.config import (
     save_config,
 )
 from local_text_search.indexer import IndexProgress, Indexer
-from local_text_search.models import AnswerResult, ChatTurn, SearchMode
+from local_text_search.models import AnswerResult, ChatTurn, SearchMode, SummaryResult
 from local_text_search.providers.base import ProviderError, build_provider
 from local_text_search.search import SearchError, SearchService
 
@@ -101,6 +101,29 @@ def render_answer_result(result: AnswerResult) -> None:
         )
     )
     render_source_cards(result.sources)
+
+
+def render_summary_result(result: SummaryResult) -> None:
+    title = f"{result.provider}:{result.model}"
+    console.print(Rule(title, style="cyan"))
+    console.print(
+        Panel(
+            Markdown(result.summary),
+            border_style="cyan",
+            expand=False,
+        )
+    )
+    stats = Table(show_header=False, box=None, pad_edge=False)
+    stats.add_row("files", str(result.files_summarized))
+    stats.add_row("chunks", str(result.chunks_summarized))
+    stats.add_row("llm_calls", str(result.llm_calls))
+    stats.add_row("reduction_rounds", str(result.reduction_rounds))
+    if result.focus:
+        stats.add_row("focus", result.focus)
+    if result.retrieval_query:
+        stats.add_row("retrieval_query", result.retrieval_query)
+    console.print(Rule("Summary Stats", style="magenta"))
+    console.print(stats)
 
 
 def exit_with_error(message: str) -> None:
@@ -375,6 +398,38 @@ def ask(
     finally:
         service.close()
     render_answer_result(result)
+
+
+@app.command()
+def summarize(
+    focus: str | None = typer.Argument(None, help="Optional focus or summary question."),
+    vault: str | None = typer.Option(None, "--vault", help="Vault name."),
+    provider: str | None = typer.Option(None, "--provider", help="Answer provider."),
+    retrieval_query: str | None = typer.Option(
+        None,
+        "--retrieval-query",
+        help="Limit summarization to chunks retrieved for this query.",
+    ),
+) -> None:
+    """Summarize the indexed vault with hierarchical reduction."""
+    config = resolve_config()
+    try:
+        selected_vault = resolve_vault(config, vault)
+    except ValueError as exc:
+        exit_with_error(str(exc))
+    service = SearchService(config=config, vault=selected_vault)
+    try:
+        with console.status("Building hierarchical summary...", spinner="dots"):
+            result = service.summarize(
+                focus=focus,
+                retrieval_query=retrieval_query,
+                provider_name=provider,
+            )
+    except (SearchError, ProviderError, Exception) as exc:
+        exit_with_error(str(exc))
+    finally:
+        service.close()
+    render_summary_result(result)
 
 
 @app.command()

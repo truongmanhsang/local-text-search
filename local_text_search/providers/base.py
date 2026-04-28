@@ -23,6 +23,10 @@ class BaseProvider(ABC):
         self.master_prompt = (master_prompt or "").strip() or None
 
     @abstractmethod
+    def complete(self, prompt: str, *, max_tokens: int = 700) -> str:
+        raise NotImplementedError
+
+    @abstractmethod
     def generate_answer(
         self,
         question: str,

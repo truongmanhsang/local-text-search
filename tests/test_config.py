@@ -55,3 +55,12 @@ def test_qdrant_remote_url_normalizes_missing_scheme() -> None:
 def test_provider_master_prompt_is_configurable() -> None:
     config = AppConfig.model_validate({"providers": {"master_prompt": "Answer in JSON only."}})
     assert config.providers.master_prompt == "Answer in JSON only."
+
+
+def test_summarization_config_is_configurable() -> None:
+    config = AppConfig.model_validate(
+        {"summarization": {"final_summary_words": 600, "reduce_group_size": 4, "retrieval_top_k": 24}}
+    )
+    assert config.summarization.final_summary_words == 600
+    assert config.summarization.reduce_group_size == 4
+    assert config.summarization.retrieval_top_k == 24

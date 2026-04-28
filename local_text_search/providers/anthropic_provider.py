@@ -53,13 +53,16 @@ class AnthropicProvider(BaseProvider):
             raise ProviderError("Anthropic response did not include text content.")
         return "".join(text_parts)
 
+    def complete(self, prompt: str, *, max_tokens: int = 700) -> str:
+        return self._post(prompt, max_tokens=max_tokens)
+
     def generate_answer(
         self,
         question: str,
         context_chunks: Sequence[SearchHit],
         conversation_history: Sequence[ChatTurn] | None = None,
     ) -> str:
-        return self._post(
+        return self.complete(
             self.build_context_prompt(
                 question,
                 context_chunks,
@@ -71,5 +74,5 @@ class AnthropicProvider(BaseProvider):
 
     def rerank(self, query: str, candidates: Sequence[SearchHit]) -> list[str]:
         candidate_ids = [candidate.chunk_id for candidate in candidates]
-        response = self._post(self.build_rerank_prompt(query, candidates), max_tokens=300)
+        response = self.complete(self.build_rerank_prompt(query, candidates), max_tokens=300)
         return self.parse_rerank_response(response, candidate_ids)

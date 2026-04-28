@@ -108,6 +108,18 @@ class AnswerResult(BaseModel):
     context_chunks: list[str] = Field(default_factory=list)
 
 
+class SummaryResult(BaseModel):
+    summary: str
+    provider: str
+    model: str
+    files_summarized: int
+    chunks_summarized: int
+    llm_calls: int = 0
+    reduction_rounds: int = 0
+    focus: str | None = None
+    retrieval_query: str | None = None
+
+
 class ChatTurn(BaseModel):
     role: str
     content: str

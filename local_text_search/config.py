@@ -39,6 +39,14 @@ wikilink_weight = 0.12
 wikilink_anchor_count = 3
 wikilink_chunks_per_target = 2
 
+[summarization]
+chunk_group_words = 1400
+partial_summary_words = 160
+file_summary_words = 220
+final_summary_words = 420
+reduce_group_size = 8
+retrieval_top_k = 48
+
 [qdrant]
 location = "local"
 url = "http://192.168.1.8:6333/"
@@ -187,6 +195,15 @@ class SearchConfig(BaseModel):
     wikilink_chunks_per_target: int = 2
 
 
+class SummarizationConfig(BaseModel):
+    chunk_group_words: int = 1400
+    partial_summary_words: int = 160
+    file_summary_words: int = 220
+    final_summary_words: int = 420
+    reduce_group_size: int = 8
+    retrieval_top_k: int = 48
+
+
 class QdrantConfig(BaseModel):
     location: Literal["local", "remote"] = "local"
     url: str | None = None
@@ -238,6 +255,7 @@ class AppConfig(BaseModel):
     vaults: list[VaultConfig] = Field(default_factory=list)
     indexing: IndexingConfig = Field(default_factory=IndexingConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    summarization: SummarizationConfig = Field(default_factory=SummarizationConfig)
     qdrant: QdrantConfig = Field(default_factory=QdrantConfig)
     embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)

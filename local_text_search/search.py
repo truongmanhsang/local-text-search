@@ -9,7 +9,7 @@ from qdrant_client.http import models as qdrant_models
 
 from local_text_search.config import AppConfig, VaultConfig
 from local_text_search.embeddings import EmbeddingClient, build_embedding_client
-from local_text_search.models import AnswerResult, ChatTurn, SearchHit, SearchMode
+from local_text_search.models import AnswerResult, ChatTurn, ChunkRecord, SearchHit, SearchMode, SummaryResult
 from local_text_search.providers.base import BaseProvider, build_provider
 from local_text_search.storage import VaultStorage
 
@@ -24,6 +24,12 @@ class MergedHit:
     semantic_score: float | None = None
     bm25_score: float | None = None
     merged_score: float = 0.0
+
+
+@dataclass(slots=True)
+class SummarySection:
+    label: str
+    content: str
 
 
 class SearchService:
@@ -348,6 +354,79 @@ class SearchService:
             context_chunks=[hit.chunk_id for hit in hits],
         )
 
+    def summarize(
+        self,
+        *,
+        focus: str | None = None,
+        retrieval_query: str | None = None,
+        provider_name: str | None = None,
+    ) -> SummaryResult:
+        if not self.storage.has_indexed_chunks():
+            raise SearchError("Vault has not been indexed yet. Run `local-text-search index` first.")
+        provider = build_provider(self.config, provider_name=provider_name)
+        summary_chunks = self._summary_chunks(
+            provider=provider,
+            retrieval_query=retrieval_query,
+        )
+        file_sections: list[SummarySection] = []
+        file_count = 0
+        chunk_count = len(summary_chunks)
+        llm_calls = 0
+        reduction_rounds = 0
+        current_file_path: str | None = None
+        current_chunks: list[ChunkRecord] = []
+        for chunk in summary_chunks:
+            if current_file_path is None:
+                current_file_path = chunk.file_path
+            if chunk.file_path != current_file_path:
+                file_summary, file_calls, file_rounds = self._summarize_file_chunks(
+                    current_file_path,
+                    current_chunks,
+                    provider,
+                    focus=focus,
+                )
+                file_sections.append(SummarySection(label=current_file_path, content=file_summary))
+                file_count += 1
+                llm_calls += file_calls
+                reduction_rounds += file_rounds
+                current_file_path = chunk.file_path
+                current_chunks = [chunk]
+                continue
+            current_chunks.append(chunk)
+        if current_chunks and current_file_path is not None:
+            file_summary, file_calls, file_rounds = self._summarize_file_chunks(
+                current_file_path,
+                current_chunks,
+                provider,
+                focus=focus,
+            )
+            file_sections.append(SummarySection(label=current_file_path, content=file_summary))
+            file_count += 1
+            llm_calls += file_calls
+            reduction_rounds += file_rounds
+        if not file_sections:
+            raise SearchError("No indexed chunks were available to summarize.")
+        final_summary, final_calls, final_rounds = self._reduce_summary_sections(
+            file_sections,
+            provider,
+            focus=focus,
+            target_words=self.config.summarization.final_summary_words,
+            stage="vault-reduce",
+            scope_label=f"vault={self.vault.name}",
+            allow_passthrough=False,
+        )
+        return SummaryResult(
+            summary=final_summary,
+            provider=provider.provider_name,
+            model=provider.model_name,
+            files_summarized=file_count,
+            chunks_summarized=chunk_count,
+            llm_calls=llm_calls + final_calls,
+            reduction_rounds=reduction_rounds + final_rounds,
+            focus=focus,
+            retrieval_query=retrieval_query,
+        )
+
     @staticmethod
     def _build_chat_query(
         question: str,
@@ -388,3 +467,242 @@ class SearchService:
         if len(normalized.split()) <= 6 and normalized.endswith(("more", "details", "again", "thêm", "nữa", "tiếp")):
             return True
         return False
+
+    @staticmethod
+    def _summary_max_tokens(target_words: int) -> int:
+        return max(220, min(1400, target_words * 2))
+
+    def _summary_chunks(
+        self,
+        *,
+        provider: BaseProvider,
+        retrieval_query: str | None,
+    ) -> list[ChunkRecord]:
+        if not retrieval_query:
+            return list(self.storage.iter_chunks())
+        hits = self.search(
+            retrieval_query,
+            mode=SearchMode.HYBRID,
+            top_k=self.config.summarization.retrieval_top_k,
+            rerank=self.config.search.rerank_default_ask,
+            provider=provider,
+        )
+        if not hits:
+            raise SearchError(f"No search hits were found for retrieval query `{retrieval_query}`.")
+        unique_hits: dict[str, ChunkRecord] = {}
+        for hit in hits:
+            unique_hits[hit.chunk_id] = self._chunk_record_from_hit(hit)
+        return sorted(
+            unique_hits.values(),
+            key=lambda chunk: (chunk.file_path, chunk.chunk_index),
+        )
+
+    @staticmethod
+    def _chunk_record_from_hit(hit: SearchHit) -> ChunkRecord:
+        return ChunkRecord(
+            chunk_id=hit.chunk_id,
+            file_path=hit.file_path,
+            vault_name=hit.vault_name,
+            heading=hit.heading,
+            tags=list(hit.tags),
+            backlinks=list(hit.backlinks),
+            modified_time=hit.modified_time,
+            chunk_index=hit.chunk_index,
+            text=hit.text,
+            content_hash=f"search-hit:{hit.chunk_id}",
+            token_count=len(hit.text.split()),
+            term_frequencies={},
+        )
+
+    @staticmethod
+    def _chunk_word_count(chunk: ChunkRecord) -> int:
+        return max(1, chunk.token_count or len(chunk.text.split()) or 1)
+
+    def _group_chunks_by_word_budget(
+        self,
+        chunks: Sequence[ChunkRecord],
+        *,
+        max_words: int,
+    ) -> list[list[ChunkRecord]]:
+        limit = max(1, max_words)
+        groups: list[list[ChunkRecord]] = []
+        current_group: list[ChunkRecord] = []
+        current_words = 0
+        for chunk in chunks:
+            chunk_words = self._chunk_word_count(chunk)
+            if current_group and current_words + chunk_words > limit:
+                groups.append(current_group)
+                current_group = [chunk]
+                current_words = chunk_words
+                continue
+            current_group.append(chunk)
+            current_words += chunk_words
+        if current_group:
+            groups.append(current_group)
+        return groups
+
+    def _summarize_file_chunks(
+        self,
+        file_path: str,
+        chunks: Sequence[ChunkRecord],
+        provider: BaseProvider,
+        *,
+        focus: str | None,
+    ) -> tuple[str, int, int]:
+        partial_sections: list[SummarySection] = []
+        llm_calls = 0
+        for group_index, group in enumerate(
+            self._group_chunks_by_word_budget(
+                chunks,
+                max_words=self.config.summarization.chunk_group_words,
+            ),
+            start=1,
+        ):
+            prompt = self._build_chunk_group_summary_prompt(
+                file_path=file_path,
+                chunks=group,
+                group_index=group_index,
+                target_words=self.config.summarization.partial_summary_words,
+                focus=focus,
+            )
+            partial_summary = provider.complete(
+                prompt,
+                max_tokens=self._summary_max_tokens(self.config.summarization.partial_summary_words),
+            ).strip()
+            partial_sections.append(SummarySection(label=f"{file_path}::part-{group_index}", content=partial_summary))
+            llm_calls += 1
+        file_summary, reduce_calls, reduce_rounds = self._reduce_summary_sections(
+            partial_sections,
+            provider,
+            focus=focus,
+            target_words=self.config.summarization.file_summary_words,
+            stage="file-reduce",
+            scope_label=f"file={file_path}",
+            allow_passthrough=True,
+        )
+        return file_summary, llm_calls + reduce_calls, reduce_rounds
+
+    def _reduce_summary_sections(
+        self,
+        sections: Sequence[SummarySection],
+        provider: BaseProvider,
+        *,
+        focus: str | None,
+        target_words: int,
+        stage: str,
+        scope_label: str,
+        allow_passthrough: bool,
+    ) -> tuple[str, int, int]:
+        if not sections:
+            raise SearchError("Cannot summarize an empty section set.")
+        current_sections = [SummarySection(label=section.label, content=section.content) for section in sections]
+        if len(current_sections) == 1 and allow_passthrough:
+            return current_sections[0].content, 0, 0
+        llm_calls = 0
+        reduction_rounds = 0
+        batch_size = max(2, self.config.summarization.reduce_group_size)
+        while len(current_sections) > 1 or reduction_rounds == 0:
+            reduction_rounds += 1
+            next_sections: list[SummarySection] = []
+            for batch_index in range(0, len(current_sections), batch_size):
+                batch = current_sections[batch_index : batch_index + batch_size]
+                prompt = self._build_reduce_summary_prompt(
+                    sections=batch,
+                    target_words=target_words,
+                    focus=focus,
+                    stage=stage,
+                    scope_label=scope_label,
+                    round_number=reduction_rounds,
+                )
+                reduced = provider.complete(
+                    prompt,
+                    max_tokens=self._summary_max_tokens(target_words),
+                ).strip()
+                next_sections.append(
+                    SummarySection(
+                        label=f"{scope_label}::round-{reduction_rounds}-batch-{(batch_index // batch_size) + 1}",
+                        content=reduced,
+                    )
+                )
+                llm_calls += 1
+            current_sections = next_sections
+        return current_sections[0].content, llm_calls, reduction_rounds
+
+    def _build_chunk_group_summary_prompt(
+        self,
+        *,
+        file_path: str,
+        chunks: Sequence[ChunkRecord],
+        group_index: int,
+        target_words: int,
+        focus: str | None,
+    ) -> str:
+        lines = [
+            "Summary stage: file-chunks",
+            f"Scope: file={file_path}",
+            f"Group: {group_index}",
+            f"Target length: about {target_words} words.",
+            "Task: Summarize the source excerpts into the most important ideas, decisions, claims, and open questions.",
+            "Requirements:",
+            "- Use concise bullets.",
+            "- Preserve nuance, disagreements, and unresolved issues when present.",
+            "- Omit repetition and low-signal detail.",
+        ]
+        if focus:
+            lines.append(f"Focus: {focus}")
+        lines.append("")
+        for index, chunk in enumerate(chunks, start=1):
+            heading = chunk.heading or "No heading"
+            lines.extend(
+                [
+                    f"## Chunk {index}",
+                    f"source={chunk.source_label}",
+                    f"heading={heading}",
+                    "content:",
+                    chunk.text,
+                    "",
+                ]
+            )
+        return "\n".join(lines).strip()
+
+    def _build_reduce_summary_prompt(
+        self,
+        *,
+        sections: Sequence[SummarySection],
+        target_words: int,
+        focus: str | None,
+        stage: str,
+        scope_label: str,
+        round_number: int,
+    ) -> str:
+        lines = [
+            f"Summary stage: {stage}",
+            f"Scope: {scope_label}",
+            f"Round: {round_number}",
+            f"Target length: about {target_words} words.",
+        ]
+        if stage == "file-reduce":
+            lines.append("Task: Combine the partial summaries from one file into a single coherent file summary.")
+        else:
+            lines.append("Task: Combine the source summaries into a coherent overview of the whole vault.")
+        lines.extend(
+            [
+                "Requirements:",
+                "- Synthesize repeated themes instead of concatenating bullets.",
+                "- Keep the highest-signal details, distinctions, and tensions.",
+                "- Use concise bullets followed by a short closing synthesis sentence.",
+            ]
+        )
+        if focus:
+            lines.append(f"Focus: {focus}")
+        lines.append("")
+        for index, section in enumerate(sections, start=1):
+            lines.extend(
+                [
+                    f"## Summary {index}",
+                    f"label={section.label}",
+                    section.content,
+                    "",
+                ]
+            )
+        return "\n".join(lines).strip()
