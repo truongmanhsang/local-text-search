@@ -16,12 +16,14 @@ class AnthropicProvider(BaseProvider):
         *,
         api_key: str,
         model: str,
+        base_url: str | None = None,
         timeout_seconds: float = 120.0,
         master_prompt: str | None = None,
     ) -> None:
         super().__init__(master_prompt=master_prompt)
         self.api_key = api_key
         self.model_name = model
+        self.base_url = base_url or "https://api.anthropic.com"
         self.timeout_seconds = timeout_seconds
 
     def _post(self, prompt: str, *, max_tokens: int) -> str:
@@ -38,7 +40,7 @@ class AnthropicProvider(BaseProvider):
         }
         try:
             response = httpx.post(
-                "https://api.anthropic.com/v1/messages",
+                f"{self.base_url}/v1/messages",
                 headers=headers,
                 json=body,
                 timeout=self.timeout_seconds,
@@ -48,12 +50,21 @@ class AnthropicProvider(BaseProvider):
             raise ProviderError(f"Anthropic request failed: {exc}") from exc
         payload = response.json()
         parts = payload.get("content", [])
-        text_parts = [part.get("text", "") for part in parts if isinstance(part, dict) and part.get("type") == "text"]
+        text_parts = []
+        thinking_parts = []
+        for part in parts if isinstance(parts, list) else []:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    text_parts.append(part.get("text", ""))
+                elif part.get("type") == "thinking":
+                    thinking_parts.append(part.get("thinking", ""))
+        if not text_parts and thinking_parts:
+            text_parts = thinking_parts
         if not text_parts:
-            raise ProviderError("Anthropic response did not include text content.")
+            raise ProviderError(f"Anthropic response did not include text content. Payload: {payload}")
         return "".join(text_parts)
 
-    def complete(self, prompt: str, *, max_tokens: int = 700) -> str:
+    def complete(self, prompt: str, *, max_tokens: int = 2000) -> str:
         return self._post(prompt, max_tokens=max_tokens)
 
     def generate_answer(
@@ -69,7 +80,7 @@ class AnthropicProvider(BaseProvider):
                 conversation_history,
                 master_prompt=self.master_prompt,
             ),
-            max_tokens=700,
+            max_tokens=2000,
         )
 
     def rerank(self, query: str, candidates: Sequence[SearchHit]) -> list[str]:

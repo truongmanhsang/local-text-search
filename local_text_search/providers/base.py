@@ -159,6 +159,7 @@ def build_provider(config: AppConfig, provider_name: str | None = None) -> BaseP
         return AnthropicProvider(
             api_key=api_key,
             model=settings.model,
+            base_url=settings.base_url,
             timeout_seconds=settings.timeout_seconds,
             master_prompt=config.providers.master_prompt,
         )

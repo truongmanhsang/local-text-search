@@ -152,6 +152,7 @@ class AnthropicProviderConfig(BaseModel):
     api_key: str | None = None
     api_key_env: str = "ANTHROPIC_API_KEY"
     model: str = "claude-3-5-haiku-latest"
+    base_url: str | None = None
     timeout_seconds: float = 120.0
 
     def resolved_api_key(self) -> str | None:
